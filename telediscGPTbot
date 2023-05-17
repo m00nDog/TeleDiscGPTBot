@@ -1,0 +1,116 @@
+import os
+import asyncio
+import telebot
+import openai
+import threading
+import requests
+import json
+from dotenv import load_dotenv
+import discord
+from discord.ext import commands
+
+# Load environment variables
+load_dotenv()
+
+# Set up environment variables for sensitive information
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+
+# Initialize bot and set API key
+bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
+openai.api_key = OPENAI_API_KEY
+
+# Discord bot setup
+intents = discord.Intents.default()
+intents.typing = False
+intents.presences = False
+discord_bot = commands.Bot(command_prefix="!", intents=intents)
+
+# Constants
+TELEGRAM_GROUP_ID = '@INSERTTELEGRAMGROUP'
+
+def generate_gpt_response(prompt):
+    """Generate a response using GPT."""
+    try:
+        conversation_prompt = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {OPENAI_API_KEY}"
+        }
+        
+        data = {
+            "model": "gpt-4",
+            "messages": conversation_prompt,
+            "max_tokens": 1024,
+            "temperature": 1.0
+        }
+
+        response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, data=json.dumps(data))
+
+        if response.status_code == 200:
+            response_json = response.json()
+            assistant_message = response_json["choices"][0]["message"]["content"]
+            return assistant_message.strip()
+        else:
+            print(f"Error generating response: {response.text}")
+            return "Sorry, I couldn't generate a response."
+
+    except Exception as e:
+        print(f"Error generating response: {e}")
+        return "Sorry, I couldn't generate a response."
+
+@bot.message_handler(commands=['start'])
+def start(message):
+    """Handle the /start command."""
+    bot.reply_to(message, "What do you want?")
+
+@bot.message_handler(func=lambda message: True)
+def handle_message(message):
+    if message.text:
+        gpt_response = generate_gpt_response(message.text)
+        if gpt_response:
+            bot.send_message(message.chat.id, gpt_response, reply_to_message_id=message.message_id)
+        else:
+            bot.send_message(message.chat.id, "I'm sorry, I couldn't generate a response.", reply_to_message_id=message.message_id)
+    else:
+        bot.send_message(message.chat.id, "Please send a message.", reply_to_message_id=message.message_id)
+
+@discord_bot.event
+async def on_ready():
+    print(f"{discord_bot.user.name} is ready.")
+
+@discord_bot.event
+async def on_message(message):
+    if message.author == discord_bot.user:
+        return
+
+    if message.content.startswith('!'):
+        await discord_bot.process_commands(message)
+        return
+
+    gpt_response = generate_gpt_response(message.content)
+    if gpt_response:
+        await message.channel.send(gpt_response)
+    else:
+        await message.channel.send("Sorry, I could not generate a response.")
+
+def main():
+    """Main function to start the bot polling."""
+    try:
+        # Start the Telegram bot polling
+        t = threading.Thread(target=bot.infinity_polling)
+        t.start()
+
+        # Start the Discord bot
+        asyncio.run(discord_bot.start(DISCORD_BOT_TOKEN))
+
+    except Exception as e:
+        print(f"Unexpected error starting the bot: {e}")
+
+if __name__ == '__main__':
+    main()
